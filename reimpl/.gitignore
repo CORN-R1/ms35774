@@ -1,0 +1,9 @@
+# kernel build crap
+
+*.o
+*.mod.c
+*.ko
+*.mod
+*.cmd
+Module.symvers
+modules.order
