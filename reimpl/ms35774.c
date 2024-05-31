@@ -8,12 +8,16 @@ Status: Incomplete, very WIP!!!!
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
+#include <linux/workqueue.h>
 #include <linux/platform_device.h>
 #include <linux/pinctrl/consumer.h>
 
-int ms35774_run_thread_handler(void *data);
+int ms35774_run_thread_handler(void *);
+void ms35774_init_work_handler(struct work_struct *);
 int ms35774_probe(struct platform_device *);
 void ms35774_shutdown(struct platform_device *);
+ssize_t ms35774_show_orientation(struct device *, struct device_attribute *, char *);
+ssize_t ms35774_store_orientation(struct device *, struct device_attribute *, const char *, size_t);
 int ms35774_driver_init(void);
 void ms35774_driver_exit(void);
 
@@ -57,6 +61,7 @@ struct ms35774_pdata {
 	struct device *dev;
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *pctrlstates[MS35774_PIN_COUNT];
+	struct work_struct *work;
 	int angle_now;
 	int angle_target;
 	bool needs_update;
@@ -70,15 +75,37 @@ struct platform_driver ms35774_pdrv = {
 	}
 };
 
+struct device_attribute ms35774_devattr = {
+	.attr.name = "orientation",
+	.show = ms35774_show_orientation,
+	.store = ms35774_store_orientation,
+};
+
+ssize_t ms35774_show_orientation(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return 0;
+}
+
+ssize_t ms35774_store_orientation(struct device *dev, struct device_attribute *attr, const char *buf, size_t len)
+{
+	return 0;
+}
+
 int ms35774_run_thread_handler(void *data)
 {
 	return 0; // TODO
+}
+
+void ms35774_init_work_handler(struct work_struct *work)
+{
+	return; // TODO
 }
 
 int ms35774_probe(struct platform_device *pdev)
 {
 	struct ms35774_pdata *state;
 	struct device *dev;
+	int err;
 
 	dev = &pdev->dev;
 	
@@ -103,7 +130,7 @@ int ms35774_probe(struct platform_device *pdev)
 	for (size_t i = 0; i < MS35774_PIN_COUNT; i++) {
 		state->pctrlstates[i] = pinctrl_lookup_state(state->pinctrl, MS35774_PIN_NAMES[i]);
 		if (IS_ERR(state->pctrlstates[i])) {
-			dev_err(dev, "[%s] fail to get pinctrl %s\n", "ms35774_parse_dts", MS35774_PIN_NAMES[i]);
+			dev_err(dev, "[%s] failed to get pinctrl %s\n", "ms35774_parse_dts", MS35774_PIN_NAMES[i]);
 			return -ENODEV;
 		}
 	}
@@ -122,21 +149,30 @@ int ms35774_probe(struct platform_device *pdev)
 	state->angle_target = 0;
 	state->needs_update = false;
 
-	struct task_struct *thread = kthread_create_on_node(
+	struct task_struct *thread = kthread_create(
 		ms35774_run_thread_handler,
 		state,
-		NUMA_NO_NODE,
 		"ms35774_step_motor_run_thread"
 	);
 
 	if (IS_ERR(thread)) {
-		dev_err(dev, "[%s] fail to create motor run thread\n", "ms35774_probe");
+		dev_err(dev, "[%s] failed to create motor run thread\n", "ms35774_probe");
 		return PTR_ERR(thread);
 	}
 
 	wake_up_process(thread);
 
-	return 0; // TODO
+	INIT_WORK(state->work, ms35774_init_work_handler);
+
+	err = device_create_file(dev, &ms35774_devattr);
+	if (err != 0) {
+		dev_err(dev, "[%s] failed to create sysfs attr! ret:%d\n", "ms35774_probe", err);
+		return err;
+	}
+
+	schedule_work(state->work);
+	dev_info(dev, "[%s] success!\n", "ms35774_probe");
+	return 0;
 }
 
 void ms35774_shutdown(struct platform_device *pdev)
