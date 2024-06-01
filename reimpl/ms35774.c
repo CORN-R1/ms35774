@@ -12,6 +12,9 @@ Status: Incomplete, very WIP!!!!
 #include <linux/platform_device.h>
 #include <linux/pinctrl/consumer.h>
 
+#define LOG_INFO(dev, fmt, ...) dev_info(dev, "[%s] " fmt, __FUNCTION__, ##__VA_ARGS__)
+#define LOG_ERR(dev, fmt, ...) dev_err(dev, "[%s] " fmt, __FUNCTION__, ##__VA_ARGS__)
+
 int ms35774_run_thread_handler(void *);
 void ms35774_init_work_handler(struct work_struct *);
 int ms35774_probe(struct platform_device *);
@@ -67,6 +70,8 @@ struct ms35774_pdata {
 	bool needs_update;
 };
 
+int ms35774_parse_dts(struct ms35774_pdata *);
+
 struct platform_driver ms35774_pdrv = {
 	.probe = ms35774_probe,
 	.shutdown = ms35774_shutdown,
@@ -101,6 +106,25 @@ void ms35774_init_work_handler(struct work_struct *work)
 	return; // TODO
 }
 
+int ms35774_parse_dts(struct ms35774_pdata *state)
+{
+	state->pinctrl = devm_pinctrl_get(state->dev);
+	if (IS_ERR(state->pinctrl)) {
+		LOG_ERR(state->dev, "fail to get pinctrl\n"); // TODO: as above
+		return -ENODEV;
+	}
+
+	for (size_t i = 0; i < MS35774_PIN_COUNT; i++) {
+		state->pctrlstates[i] = pinctrl_lookup_state(state->pinctrl, MS35774_PIN_NAMES[i]);
+		if (IS_ERR(state->pctrlstates[i])) {
+			LOG_ERR(state->dev, "failed to get pinctrl %s\n", MS35774_PIN_NAMES[i]);
+			return -ENODEV;
+		}
+	}
+
+	return 0;
+}
+
 int ms35774_probe(struct platform_device *pdev)
 {
 	struct ms35774_pdata *state;
@@ -117,24 +141,14 @@ int ms35774_probe(struct platform_device *pdev)
 	state->dev = dev;
 	dev->platform_data = state;
 	
-	dev_info(dev, "[%s] enter\n", "ms35774_probe"); // TODO: function name is clearly inserted by some macro or other - find it if it exists, or create a new one
+	LOG_INFO(dev, "enter\n"); // TODO: function name is clearly inserted by some macro or other - find it if it exists, or create a new one
 
-	// TODO: break this out into its own function
-
-	state->pinctrl = devm_pinctrl_get(dev);
-	if (IS_ERR(state->pinctrl)) {
-		dev_err(dev, "[%s] fail to get pinctrl\n", "ms35774_parse_dts"); // TODO: as above
-		return -ENODEV;
+	err = ms35774_parse_dts(state);
+	if (err < 0) {
+		LOG_ERR(dev,"fail to parse dts\n");
+		return err;
 	}
-
-	for (size_t i = 0; i < MS35774_PIN_COUNT; i++) {
-		state->pctrlstates[i] = pinctrl_lookup_state(state->pinctrl, MS35774_PIN_NAMES[i]);
-		if (IS_ERR(state->pctrlstates[i])) {
-			dev_err(dev, "[%s] failed to get pinctrl %s\n", "ms35774_parse_dts", MS35774_PIN_NAMES[i]);
-			return -ENODEV;
-		}
-	}
-
+	
 	pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_VM_LOW]);
 	pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_ENN_HIGH]);
 	pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_DIR_LOW]);
@@ -156,7 +170,7 @@ int ms35774_probe(struct platform_device *pdev)
 	);
 
 	if (IS_ERR(thread)) {
-		dev_err(dev, "[%s] failed to create motor run thread\n", "ms35774_probe");
+		LOG_ERR(dev, "failed to create motor run thread\n");
 		return PTR_ERR(thread);
 	}
 
@@ -166,12 +180,12 @@ int ms35774_probe(struct platform_device *pdev)
 
 	err = device_create_file(dev, &ms35774_devattr);
 	if (err != 0) {
-		dev_err(dev, "[%s] failed to create sysfs attr! ret:%d\n", "ms35774_probe", err);
+		LOG_ERR(dev, "failed to create sysfs attr! ret:%d\n", err);
 		return err;
 	}
 
 	schedule_work(state->work);
-	dev_info(dev, "[%s] success!\n", "ms35774_probe");
+	LOG_INFO(dev, "success!\n");
 	return 0;
 }
 
