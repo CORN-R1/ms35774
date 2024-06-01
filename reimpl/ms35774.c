@@ -65,7 +65,7 @@ struct ms35774_pdata {
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *pctrlstates[MS35774_PIN_COUNT];
 	struct work_struct *work;
-	int angle_now;
+	int angle_now; // TODO: maybe store as uint?
 	int angle_target;
 	bool needs_update;
 };
@@ -86,19 +86,49 @@ struct device_attribute ms35774_devattr = {
 	.store = ms35774_store_orientation,
 };
 
+DECLARE_WAIT_QUEUE_HEAD(ms35774_wq);
+
 ssize_t ms35774_show_orientation(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return 0;
+	struct ms35774_pdata *state = dev->platform_data;
+	return sprintf(buf, "%d\n", state->angle_now);
 }
 
 ssize_t ms35774_store_orientation(struct device *dev, struct device_attribute *attr, const char *buf, size_t len)
 {
-	return 0;
+	struct ms35774_pdata *state = dev->platform_data;
+	unsigned int angle;
+	
+	if (kstrtoint(buf, 10, &angle) != 0) {
+		LOG_ERR(dev, "format error, request int 0~180\n");
+		return len; // This should probably return an error value but that's not what the original does...
+	}
+	
+	if (angle > 180) {
+		LOG_ERR(dev, "wrong request orientation(%d), must be 0~180\n", angle);
+		return len; // likewise
+	}
+
+	state->angle_target = angle;
+	state->needs_update = true;
+	wake_up(&ms35774_wq);
+
+	return len;
 }
 
 int ms35774_run_thread_handler(void *data)
 {
-	return 0; // TODO
+	struct ms35774_pdata *state = data;
+	while (!kthread_should_stop())
+	{
+		if (!state->needs_update) {
+			wait_event(ms35774_wq, state->needs_update);
+		}
+		LOG_INFO(state->dev, "run\n");
+
+		// TODO: actually update stepper position
+	}
+	return 0;
 }
 
 void ms35774_init_work_handler(struct work_struct *work)
