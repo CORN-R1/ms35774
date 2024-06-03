@@ -11,9 +11,13 @@ Status: Incomplete, very WIP!!!!
 #include <linux/workqueue.h>
 #include <linux/platform_device.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/delay.h>
+
 
 #define LOG_INFO(dev, fmt, ...) dev_info(dev, "[%s] " fmt, __FUNCTION__, ##__VA_ARGS__)
 #define LOG_ERR(dev, fmt, ...) dev_err(dev, "[%s] " fmt, __FUNCTION__, ##__VA_ARGS__)
+
+#define STEPS_PER_DEGREE 6
 
 int ms35774_run_thread_handler(void *);
 void ms35774_init_work_handler(struct work_struct *);
@@ -65,7 +69,7 @@ struct ms35774_pdata {
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *pctrlstates[MS35774_PIN_COUNT];
 	struct work_struct *work;
-	int angle_now; // TODO: maybe store as uint?
+	int angle_now; // TODO: maybe store as uint? (also maybe rename to "orientation")
 	int angle_target;
 	bool needs_update;
 };
@@ -119,6 +123,8 @@ ssize_t ms35774_store_orientation(struct device *dev, struct device_attribute *a
 int ms35774_run_thread_handler(void *data)
 {
 	struct ms35774_pdata *state = data;
+	unsigned int angle_to_turn = 0;
+
 	while (!kthread_should_stop())
 	{
 		if (!state->needs_update) {
@@ -126,7 +132,40 @@ int ms35774_run_thread_handler(void *data)
 		}
 		LOG_INFO(state->dev, "run\n");
 
-		// TODO: actually update stepper position
+		if (state->angle_now == state->angle_target) {
+			LOG_INFO(state->dev, "same orientation\n");
+			break;
+		}
+
+		if (state->angle_target < state->angle_now) {
+			pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_DIR_LOW]);
+			angle_to_turn = state->angle_now - state->angle_target;
+		} else {
+			pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_DIR_HIGH]);
+			angle_to_turn = state->angle_target - state->angle_now;
+		}
+
+		LOG_INFO(state->dev, "o:%d, or:%d, step:%d\n", state->angle_now, state->angle_target, angle_to_turn * STEPS_PER_DEGREE);
+
+		pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_VM_HIGH]);
+		udelay(10000); // 10ms
+		pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_ENN_LOW]);
+
+		for (int i = 0; i < angle_to_turn * STEPS_PER_DEGREE; i++) {
+			pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_STEP_HIGH]);
+			udelay(50);
+			pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_STEP_LOW]);
+			udelay(360);
+		}
+
+		udelay(50); // this one seems kinda unnecessary, but whatever
+		pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_ENN_HIGH]);
+		pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_VM_LOW]);
+
+		state->needs_update = false;
+		state->angle_now = state->angle_target;
+
+		LOG_INFO(state->dev, "done\n");
 	}
 	return 0;
 }
@@ -140,7 +179,7 @@ int ms35774_parse_dts(struct ms35774_pdata *state)
 {
 	state->pinctrl = devm_pinctrl_get(state->dev);
 	if (IS_ERR(state->pinctrl)) {
-		LOG_ERR(state->dev, "fail to get pinctrl\n"); // TODO: as above
+		LOG_ERR(state->dev, "failed to get pinctrl\n"); // TODO: as above
 		return -ENODEV;
 	}
 
@@ -175,7 +214,7 @@ int ms35774_probe(struct platform_device *pdev)
 
 	err = ms35774_parse_dts(state);
 	if (err < 0) {
-		LOG_ERR(dev,"fail to parse dts\n");
+		LOG_ERR(dev,"failed to parse dts\n");
 		return err;
 	}
 	
