@@ -1,6 +1,11 @@
 /*
 
-Status: Incomplete, very WIP!!!!
+Status: Incomplete, untested, very WIP!!!!
+
+Changes from the original:
+
+- Log message grammar corrections
+- Function name typo fixes (m35774 -> ms35774)
 
 */
 
@@ -76,8 +81,11 @@ struct ms35774_pdata {
 
 int ms35774_parse_dts(struct ms35774_pdata *);
 
+DECLARE_WAIT_QUEUE_HEAD(ms35774_wq);
+
 struct platform_driver ms35774_pdrv = {
 	.probe = ms35774_probe,
+	// TODO: .remove???
 	.shutdown = ms35774_shutdown,
 	.driver = {
 		.name = "step_motor_ms35774",
@@ -90,7 +98,6 @@ struct device_attribute ms35774_devattr = {
 	.store = ms35774_store_orientation,
 };
 
-DECLARE_WAIT_QUEUE_HEAD(ms35774_wq);
 
 ssize_t ms35774_show_orientation(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -123,7 +130,7 @@ ssize_t ms35774_store_orientation(struct device *dev, struct device_attribute *a
 int ms35774_run_thread_handler(void *data)
 {
 	struct ms35774_pdata *state = data;
-	unsigned int degrees_to_turn = 0;
+	unsigned int degrees_to_turn;
 
 	while (!kthread_should_stop())
 	{
@@ -179,7 +186,7 @@ int ms35774_parse_dts(struct ms35774_pdata *state)
 {
 	state->pinctrl = devm_pinctrl_get(state->dev);
 	if (IS_ERR(state->pinctrl)) {
-		LOG_ERR(state->dev, "failed to get pinctrl\n"); // TODO: as above
+		LOG_ERR(state->dev, "failed to get pinctrl\n");
 		return -ENODEV;
 	}
 
@@ -202,7 +209,7 @@ int ms35774_probe(struct platform_device *pdev)
 
 	dev = &pdev->dev;
 	
-	state = devm_kmalloc(dev, sizeof(*state), 0); // TODO: figure out correct flags!!! (or maybe there's a relevant helper func)
+	state = devm_kzalloc(dev, sizeof(*state), GFP_KERNEL); // TODO: should this get freed somewhere? (in .remove maybe?)
 	if (state == NULL) {
 		return -ENOMEM;
 	}
@@ -210,7 +217,7 @@ int ms35774_probe(struct platform_device *pdev)
 	state->dev = dev;
 	dev->platform_data = state;
 	
-	LOG_INFO(dev, "enter\n"); // TODO: function name is clearly inserted by some macro or other - find it if it exists, or create a new one
+	LOG_INFO(dev, "enter\n");
 
 	err = ms35774_parse_dts(state);
 	if (err < 0) {
@@ -260,23 +267,34 @@ int ms35774_probe(struct platform_device *pdev)
 
 void ms35774_shutdown(struct platform_device *pdev)
 {
-	return; //TODO
-}
+	struct ms35774_pdata *state = pdev->dev.platform_data;
+
+	// park the camera in downwards orientation
+	state->orientation_request = 90;
+	state->needs_update = true;
+	wake_up(&ms35774_wq);
+
+	// wait 1.5 seconds for it to actually happen
+	for (int i = 0; i < 1500; i++) {
+		udelay(1000);
+	}
+
+	return;
 
 int ms35774_driver_init(void)
 {
 	return platform_driver_register(&ms35774_pdrv);
 }
 
-/*
-nb: this function doesn't exist in the R1's driver (since it isn't a module)
-*/
 void ms35774_driver_exit(void)
 {
-	return; // TODO: something?
+	platform_driver_unregister(&ms35774_pdrv);
+	return;
 }
 
 module_init(ms35774_driver_init); 
 module_exit(ms35774_driver_exit);
 
-MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("ms35774 stepper motor driver for Rabbit R1 hardware");
+MODULE_AUTHOR("RE'd from GPL-violating kernel binaries by retr0id");
+MODULE_LICENSE("GPL v2");
