@@ -69,8 +69,8 @@ struct ms35774_pdata {
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *pctrlstates[MS35774_PIN_COUNT];
 	struct work_struct *work;
-	int angle_now; // TODO: maybe store as uint? (also maybe rename to "orientation")
-	int angle_target;
+	int orientation; // TODO: maybe store as uint?
+	int orientation_request;
 	bool needs_update;
 };
 
@@ -95,25 +95,25 @@ DECLARE_WAIT_QUEUE_HEAD(ms35774_wq);
 ssize_t ms35774_show_orientation(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct ms35774_pdata *state = dev->platform_data;
-	return sprintf(buf, "%d\n", state->angle_now);
+	return sprintf(buf, "%d\n", state->orientation);
 }
 
 ssize_t ms35774_store_orientation(struct device *dev, struct device_attribute *attr, const char *buf, size_t len)
 {
 	struct ms35774_pdata *state = dev->platform_data;
-	unsigned int angle;
+	unsigned int degrees;
 	
-	if (kstrtoint(buf, 10, &angle) != 0) {
+	if (kstrtoint(buf, 10, &degrees) != 0) {
 		LOG_ERR(dev, "format error, request int 0~180\n");
 		return len; // This should probably return an error value but that's not what the original does...
 	}
 	
-	if (angle > 180) {
-		LOG_ERR(dev, "wrong request orientation(%d), must be 0~180\n", angle);
+	if (degrees > 180) {
+		LOG_ERR(dev, "wrong request orientation(%d), must be 0~180\n", degrees);
 		return len; // likewise
 	}
 
-	state->angle_target = angle;
+	state->orientation_request = degrees;
 	state->needs_update = true;
 	wake_up(&ms35774_wq);
 
@@ -123,7 +123,7 @@ ssize_t ms35774_store_orientation(struct device *dev, struct device_attribute *a
 int ms35774_run_thread_handler(void *data)
 {
 	struct ms35774_pdata *state = data;
-	unsigned int angle_to_turn = 0;
+	unsigned int degrees_to_turn = 0;
 
 	while (!kthread_should_stop())
 	{
@@ -132,26 +132,26 @@ int ms35774_run_thread_handler(void *data)
 		}
 		LOG_INFO(state->dev, "run\n");
 
-		if (state->angle_now == state->angle_target) {
+		if (state->orientation == state->orientation_request) {
 			LOG_INFO(state->dev, "same orientation\n");
 			break;
 		}
 
-		if (state->angle_target < state->angle_now) {
+		if (state->orientation_request < state->orientation) {
 			pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_DIR_LOW]);
-			angle_to_turn = state->angle_now - state->angle_target;
+			degrees_to_turn = state->orientation - state->orientation_request;
 		} else {
 			pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_DIR_HIGH]);
-			angle_to_turn = state->angle_target - state->angle_now;
+			degrees_to_turn = state->orientation_request - state->orientation;
 		}
 
-		LOG_INFO(state->dev, "o:%d, or:%d, step:%d\n", state->angle_now, state->angle_target, angle_to_turn * STEPS_PER_DEGREE);
+		LOG_INFO(state->dev, "o:%d, or:%d, step:%d\n", state->orientation, state->orientation_request, degrees_to_turn * STEPS_PER_DEGREE);
 
 		pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_VM_HIGH]);
 		udelay(10000); // 10ms
 		pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_ENN_LOW]);
 
-		for (int i = 0; i < angle_to_turn * STEPS_PER_DEGREE; i++) {
+		for (int i = 0; i < degrees_to_turn * STEPS_PER_DEGREE; i++) {
 			pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_STEP_HIGH]);
 			udelay(50);
 			pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_STEP_LOW]);
@@ -163,7 +163,7 @@ int ms35774_run_thread_handler(void *data)
 		pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_VM_LOW]);
 
 		state->needs_update = false;
-		state->angle_now = state->angle_target;
+		state->orientation = state->orientation_request;
 
 		LOG_INFO(state->dev, "done\n");
 	}
@@ -228,8 +228,8 @@ int ms35774_probe(struct platform_device *pdev)
 	pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_MS1_HIGH]);
 	pinctrl_select_state(state->pinctrl, state->pctrlstates[MS35774_MS2_LOW]);
 
-	state->angle_now = 0;
-	state->angle_target = 0;
+	state->orientation = 0;
+	state->orientation_request = 0;
 	state->needs_update = false;
 
 	struct task_struct *thread = kthread_create(
