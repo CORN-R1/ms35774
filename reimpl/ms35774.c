@@ -179,7 +179,7 @@ int ms35774_run_thread_handler(void *data)
 
 void ms35774_init_work_handler(struct work_struct *work)
 {
-	struct ms35774_pdata *state = pdev->dev.platform_data;
+	struct ms35774_pdata *state = container_of(&work, struct ms35774_pdata, work);
 
 	// should force the camera to 180 degrees regardless of initial orientation
 	state->orientation_request = 180;
@@ -297,6 +297,7 @@ void ms35774_shutdown(struct platform_device *pdev)
 	}
 
 	return;
+}
 
 int ms35774_driver_init(void)
 {
