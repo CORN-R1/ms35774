@@ -179,7 +179,24 @@ int ms35774_run_thread_handler(void *data)
 
 void ms35774_init_work_handler(struct work_struct *work)
 {
-	return; // TODO
+	struct ms35774_pdata *state = pdev->dev.platform_data;
+
+	// should force the camera to 180 degrees regardless of initial orientation
+	state->orientation_request = 180;
+	state->needs_update = true;
+	wake_up(&ms35774_wq);
+
+	// give it 2 seconds to get there
+	for (int i = 0; i < 2000; i++) {
+		udelay(1000);
+	}
+
+	// point camera downwards
+	state->orientation_request = 90;
+	state->needs_update = true;
+	wake_up(&ms35774_wq);
+
+	return;
 }
 
 int ms35774_parse_dts(struct ms35774_pdata *state)
